@@ -1,0 +1,15 @@
+{
+    "files.associations": {
+        "*.hip": "cpp",
+        "*.sy": "sys",
+        "string.h": "c",
+        "memlayout.h": "c",
+        "mmu.h": "c",
+        "type_traits": "c",
+        "utility": "c",
+        "defs.h": "c",
+        "console.h": "c",
+        "sbi.h": "c",
+        "stdio.h": "c"
+    }
+}
