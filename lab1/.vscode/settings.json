@@ -10,6 +10,16 @@
         "defs.h": "c",
         "console.h": "c",
         "sbi.h": "c",
-        "stdio.h": "c"
+        "stdio.h": "c",
+        "random": "c",
+        "stdarg.h": "c",
+        "riscv.h": "c",
+        "array": "c",
+        "chrono": "c",
+        "compare": "c",
+        "functional": "c",
+        "ratio": "c",
+        "tuple": "c",
+        "cstdlib": "c"
     }
 }
