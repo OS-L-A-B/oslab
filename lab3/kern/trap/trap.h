@@ -43,6 +43,11 @@ struct trapframe {
     uintptr_t status;
     uintptr_t epc;
     uintptr_t badvaddr;
+    /* stval，记录与异常相关的信息，更准确的说，是出错的虚拟地址，
+     * 和sepc的区别是，sepc存的是出错时正在执行的指令地址，
+     * 而stval是出错位置的虚拟地址，sepc可能访问了stval所存地址的信息导致了异常。
+     * 这里的名称是古早的命名。
+    */
     uintptr_t cause;
 };
 

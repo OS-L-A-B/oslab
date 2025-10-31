@@ -12,6 +12,27 @@
 
 int kern_init(void) __attribute__((noreturn));
 void grade_backtrace(void);
+/*
+ * 异常触发器，为了实现challenge3的非法指令异常和断点异常
+*/
+void __attribute__((noinline))
+exception_trigger(void){
+    uint32_t illegal_address,ebreak_address;
+    asm volatile(
+        ".option push\n"
+        ".option norvc\n"          // 关 RVC：下面两条一定是 32-bit
+        ".align 2\n"
+        "   la %0, 1f\n"           // 先把 ebreak 的地址放进 %0（此时还没陷入）
+        "   la %1, 2f\n"           // 再把 illegal 的地址放进 %1
+        "1: .word 0x00100073\n"    // ebreak 的 32-bit 硬编码 (EBREAK)
+        "2: .word 0x00000000\n"    // 非法指令：全 0
+        ".option pop\n"
+        : "=r"(ebreak_address),"=r"(illegal_address)
+        :
+        : "memory");
+    cprintf("Expected ebreak address: 0x%08x\n", ebreak_address);
+    cprintf("Expected illegal instruction address: 0x%08x\n", illegal_address);
+}
 
 int kern_init(void) {
     extern char edata[], end[];
@@ -31,6 +52,7 @@ int kern_init(void) {
     pmm_init();  // init physical memory management
 
     idt_init();  // init interrupt descriptor table
+    exception_trigger(); // 触发异常
 
     clock_init();   // init clock interrupt
     intr_enable();  // enable irq interrupt
