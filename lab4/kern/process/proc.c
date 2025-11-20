@@ -64,6 +64,9 @@ list_entry_t proc_list;
 #define HASH_SHIFT 10
 #define HASH_LIST_SIZE (1 << HASH_SHIFT)
 #define pid_hashfn(x) (hash32(x, HASH_SHIFT))
+// 没找到就自己定义了一个
+// 唤醒进程，也就是将进程的状态设置为运行中（PROC_RUNNABLE）
+#define wakeup_proc(proc) (proc->state = PROC_RUNNABLE)
 
 // has list for process set based on pid
 static list_entry_t hash_list[HASH_LIST_SIZE];
@@ -322,7 +325,21 @@ int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
     //    5. insert proc_struct into hash_list && proc_list
     //    6. call wakeup_proc to make the new child process RUNNABLE
     //    7. set ret vaule using child proc's pid
-    
+    proc = allpc_proc();
+    if(setup_kstack(proc) < 0){
+        goto bad_fork_cleanup_kstack;
+    }
+    if (copy_mm(clone_flags, proc) < 0){
+        goto bad_fork_cleanup_kstack;
+    }
+    copy_thread(proc, stack, tf);
+    proc->pid = get_pid();
+    hash_proc(proc);
+    list_add(&proc_list, &(proc->list_link));
+    wakeup_proc(proc);
+    nr_process++;
+    ret = proc->pid;
+
 fork_out:
     return ret;
 
