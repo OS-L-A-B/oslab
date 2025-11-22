@@ -187,7 +187,21 @@ void proc_run(struct proc_struct *proc)
          *   lsatp():                   Modify the value of satp register
          *   switch_to():              Context switching between two processes
          */
+        bool intr_flag;
+        local_intr_save(intr_flag);        // 关中断
+        
+        struct proc_struct *prev = current;
+        current = proc;                    // 切换当前进程
+        
+        // 切换页表（地址空间）
+        uintptr_t satp_val = ((uintptr_t)proc->pgdir >> PGSHIFT);
+        lsatp(satp_val);
+        asm volatile("sfence.vma zero, zero" ::: "memory");
+        
+        // 上下文切换
+        switch_to(&(prev->context), &(proc->context));
 
+        local_intr_restore(intr_flag);     // 开中断
     }
 }
 
