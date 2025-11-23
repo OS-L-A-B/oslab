@@ -205,8 +205,7 @@ void proc_run(struct proc_struct *proc)
         current = proc;                    // 切换当前进程
         
         // 切换页表（地址空间）
-        uintptr_t satp_val = ((uintptr_t)proc->pgdir >> PGSHIFT);
-        lsatp(satp_val);
+        lsatp((unsigned int)proc->pgdir);
         asm volatile("sfence.vma zero, zero" ::: "memory");
         
         // 上下文切换
