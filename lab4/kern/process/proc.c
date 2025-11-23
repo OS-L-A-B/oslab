@@ -91,7 +91,7 @@ alloc_proc(void)
     struct proc_struct *proc = kmalloc(sizeof(struct proc_struct));
     if (proc != NULL)
     {
-        // LAB4:EXERCISE1 YOUR CODE
+        // LAB4:EXERCISE1 2312251
         /*
          * below fields in proc_struct need to be initialized
          *       enum proc_state state;                      // Process state
