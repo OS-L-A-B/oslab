@@ -89,7 +89,7 @@ alloc_proc(void)
     struct proc_struct *proc = kmalloc(sizeof(struct proc_struct));
     if (proc != NULL)
     {
-        // LAB4:EXERCISE1 YOUR CODE
+        // LAB4:EXERCISE1 2312251
         /*
          * below fields in proc_struct need to be initialized
          *       enum proc_state state;                      // Process state
@@ -105,6 +105,18 @@ alloc_proc(void)
          *       uint32_t flags;                             // Process flag
          *       char name[PROC_NAME_LEN + 1];               // Process name
          */
+        proc->state = PROC_UNINIT;                  // 设置进程为未初始化状态
+        proc->pid = -1;                             // 未初始化的进程ID为-1
+        proc->runs = 0;                             // 初始化运行次数为0
+        proc->kstack = 0;                           // 内核栈地址初始化为0
+        proc->need_resched = 0;                     // 不需要调度
+        proc->parent = NULL;                        // 父进程指针为空
+        proc->mm = NULL;                            // 虚拟内存管理结构为空
+        memset(&(proc->context), 0, sizeof(struct context));  // 初始化上下文
+        proc->tf = NULL;                            // 中断帧指针为空
+        proc->pgdir = boot_pgdir_pa;               // 页目录为内核页目录的物理地址
+        proc->flags = 0;                            // 标志位为0
+        memset(proc->name, 0, PROC_NAME_LEN + 1);  // 进程名清零
 
         // LAB5 YOUR CODE : (update LAB4 steps)
         /*
@@ -112,6 +124,8 @@ alloc_proc(void)
          *       uint32_t wait_state;                        // waiting state
          *       struct proc_struct *cptr, *yptr, *optr;     // relations between processes
          */
+        proc->wait_state = 0; 
+        proc->cptr = proc->yptr = proc->optr = NULL; 
     }
     return proc;
 }
@@ -225,6 +239,21 @@ void proc_run(struct proc_struct *proc)
          *   lsatp():                   Modify the value of satp register
          *   switch_to():              Context switching between two processes
          */
+        bool intr_flag;
+        local_intr_save(intr_flag);        // 关中断
+        
+        struct proc_struct *prev = current;
+        current = proc;                    // 切换当前进程
+        
+        // 切换页表（地址空间）
+        uintptr_t satp_val = ((uintptr_t)proc->pgdir >> PGSHIFT);
+        lsatp(satp_val);
+        asm volatile("sfence.vma zero, zero" ::: "memory");
+        
+        // 上下文切换
+        switch_to(&(prev->context), &(proc->context));
+
+        local_intr_restore(intr_flag);     // 开中断
     }
 }
 
@@ -433,7 +462,24 @@ int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
     //    5. insert proc_struct into hash_list && proc_list
     //    6. call wakeup_proc to make the new child process RUNNABLE
     //    7. set ret vaule using child proc's pid
-
+    if ((proc = alloc_proc()) == NULL){
+        goto fork_out;
+    }
+    // 设置父进程
+    proc->parent = current;
+    if(setup_kstack(proc) < 0){
+        goto bad_fork_cleanup_proc;
+    }
+    if (copy_mm(clone_flags, proc) < 0){
+        goto bad_fork_cleanup_kstack;
+    }
+    copy_thread(proc, stack, tf);
+    proc->pid = get_pid();
+    hash_proc(proc);
+    list_add(&proc_list, &(proc->list_link));
+    wakeup_proc(proc);
+    nr_process++;
+    ret = proc->pid;
     // LAB5 YOUR CODE : (update LAB4 steps)
     // TIPS: you should modify your written code in lab4(step1 and step5), not add more code.
     /* Some Functions
@@ -669,7 +715,7 @@ load_icode(unsigned char *binary, size_t size)
     // Keep sstatus
     uintptr_t sstatus = tf->status;
     memset(tf, 0, sizeof(struct trapframe));
-    /* LAB5:EXERCISE1 YOUR CODE
+    /* LAB5:EXERCISE1 2312251
      * should set tf->gpr.sp, tf->epc, tf->status
      * NOTICE: If we set trapframe correctly, then the user level process can return to USER MODE from kernel. So
      *          tf->gpr.sp should be user stack top (the value of sp)
@@ -677,6 +723,9 @@ load_icode(unsigned char *binary, size_t size)
      *          tf->status should be appropriate for user program (the value of sstatus)
      *          hint: check meaning of SPP, SPIE in SSTATUS, use them by SSTATUS_SPP, SSTATUS_SPIE(defined in risv.h)
      */
+    tf->gpr.sp = USTACKTOP;
+    tf->epc = elf->e_entry;
+    tf->status = (read_csr(sstatus) & ~SSTATUS_SPP) | SSTATUS_SPIE;
 
     ret = 0;
 out:
