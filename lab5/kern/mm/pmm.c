@@ -397,6 +397,7 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
                 return -E_NO_MEM;
             }
             uint32_t perm = (*ptep & PTE_USER);
+
             // get page from ptep
             struct Page *page = pte2page(*ptep);
             // alloc a page for process B
@@ -405,23 +406,23 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
             assert(npage != NULL);
             int ret = 0;
             /* LAB5:EXERCISE2 YOUR CODE
-             * replicate content of page to npage, build the map of phy addr of
-             * nage with the linear addr start
-             *
-             * Some Useful MACROs and DEFINEs, you can use them in below
-             * implementation.
-             * MACROs or Functions:
-             *    page2kva(struct Page *page): return the kernel vritual addr of
-             * memory which page managed (SEE pmm.h)
-             *    page_insert: build the map of phy addr of an Page with the
-             * linear addr la
-             *    memcpy: typical memory copy function
-             *
-             * (1) find src_kvaddr: the kernel virtual address of page
-             * (2) find dst_kvaddr: the kernel virtual address of npage
-             * (3) memory copy from src_kvaddr to dst_kvaddr, size is PGSIZE
-             * (4) build the map of phy addr of  nage with the linear addr start
-             */
+            * replicate content of page to npage, build the map of phy addr of
+            * nage with the linear addr start
+            *
+            * Some Useful MACROs and DEFINEs, you can use them in below
+            * implementation.
+            * MACROs or Functions:
+            *    page2kva(struct Page *page): return the kernel vritual addr of
+            * memory which page managed (SEE pmm.h)
+            *    page_insert: build the map of phy addr of an Page with the
+            * linear addr la
+            *    memcpy: typical memory copy function
+            *
+            * (1) find src_kvaddr: the kernel virtual address of page
+            * (2) find dst_kvaddr: the kernel virtual address of npage
+            * (3) memory copy from src_kvaddr to dst_kvaddr, size is PGSIZE
+            * (4) build the map of phy addr of  nage with the linear addr start
+            */
             // (1) 获取源页面的内核虚拟地址
             void *src_kvaddr = page2kva(page);
 
@@ -433,6 +434,9 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
 
             // (4) 建立目标页面与线性地址的映射
             ret = page_insert(to, npage, start, perm);
+
+            // (5) 记录虚拟地址
+            npage->pra_vaddr = start;
 
             assert(ret == 0);
         }
