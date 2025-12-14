@@ -400,45 +400,77 @@ int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end,
 
             // get page from ptep
             struct Page *page = pte2page(*ptep);
-            // alloc a page for process B
-            struct Page *npage = alloc_page();
-            assert(page != NULL);
-            assert(npage != NULL);
-            int ret = 0;
-            /* LAB5:EXERCISE2 YOUR CODE
-            * replicate content of page to npage, build the map of phy addr of
-            * nage with the linear addr start
-            *
-            * Some Useful MACROs and DEFINEs, you can use them in below
-            * implementation.
-            * MACROs or Functions:
-            *    page2kva(struct Page *page): return the kernel vritual addr of
-            * memory which page managed (SEE pmm.h)
-            *    page_insert: build the map of phy addr of an Page with the
-            * linear addr la
-            *    memcpy: typical memory copy function
-            *
-            * (1) find src_kvaddr: the kernel virtual address of page
-            * (2) find dst_kvaddr: the kernel virtual address of npage
-            * (3) memory copy from src_kvaddr to dst_kvaddr, size is PGSIZE
-            * (4) build the map of phy addr of  nage with the linear addr start
-            */
-            // (1) 获取源页面的内核虚拟地址
-            void *src_kvaddr = page2kva(page);
+            if (share){
+                // === COW 分支 (新加的) ===
 
-            // (2) 获取目标页面的内核虚拟地址  
-            void *dst_kvaddr = page2kva(npage);
+                // 1. 修改权限：加上 COW 标记，强制去掉 Write 权限
+                perm |= PTE_COW;
+                perm &= ~PTE_W;
+                // 【插入这行】
+                // 打印看看：地址是多少？权限是多少？(期待看到 perm 里没有 PTE_W)
+                // PTE_W 通常是 4 (二进制 100)，PTE_COW 是 0x100
+                // 如果打印出的 perm 是 0x10x (比如 0x107 -> User|Read|COW)，那就是对的。
+                // 如果打印出 0x1x7 (比如 0x10b -> User|Write|Read|COW)，那就是 PTE_W 没去干净！
+                if (start < 0xC0000000) { // 只打印用户态地址，防止刷屏
+                    cprintf("COW SETUP: addr=0x%x, perm=0x%x\n", start, perm);
+                }
 
-            // (3) 从源页面复制内容到目标页面
-            memcpy(dst_kvaddr, src_kvaddr, PGSIZE);
+                // 2. 映射给子进程 (to)
+                // page_insert 会自动增加引用计数 (page->ref++)
+                if (page_insert(to, page, start, perm) != 0) {
+                    return -E_NO_MEM;
+                }
 
-            // (4) 建立目标页面与线性地址的映射
-            ret = page_insert(to, npage, start, perm);
+                // 3. 【关键】修改父进程 (from) 的权限
+                // 父进程也必须变成只读+COW，否则父进程一写，子进程的数据就变了
+                // page_insert 发现是同一个页映射同一个地址，只会更新 PTE 权限，不会错误地增加 ref
+                if (page_insert(from, page, start, perm) != 0) {
+                    return -E_NO_MEM;
+                }
+                
+                // 这里的 page_insert 会自动刷新 TLB，所以不用手动 tlb_invalidate
+            }
+            else{
+                // alloc a page for process B
+                struct Page *npage = alloc_page();
+                assert(page != NULL);
+                assert(npage != NULL);
+                int ret = 0;
+                /* LAB5:EXERCISE2 YOUR CODE
+                * replicate content of page to npage, build the map of phy addr of
+                * nage with the linear addr start
+                *
+                * Some Useful MACROs and DEFINEs, you can use them in below
+                * implementation.
+                * MACROs or Functions:
+                *    page2kva(struct Page *page): return the kernel vritual addr of
+                * memory which page managed (SEE pmm.h)
+                *    page_insert: build the map of phy addr of an Page with the
+                * linear addr la
+                *    memcpy: typical memory copy function
+                *
+                * (1) find src_kvaddr: the kernel virtual address of page
+                * (2) find dst_kvaddr: the kernel virtual address of npage
+                * (3) memory copy from src_kvaddr to dst_kvaddr, size is PGSIZE
+                * (4) build the map of phy addr of  nage with the linear addr start
+                */
+                // (1) 获取源页面的内核虚拟地址
+                void *src_kvaddr = page2kva(page);
 
-            // (5) 记录虚拟地址
-            npage->pra_vaddr = start;
+                // (2) 获取目标页面的内核虚拟地址  
+                void *dst_kvaddr = page2kva(npage);
 
-            assert(ret == 0);
+                // (3) 从源页面复制内容到目标页面
+                memcpy(dst_kvaddr, src_kvaddr, PGSIZE);
+
+                // (4) 建立目标页面与线性地址的映射
+                ret = page_insert(to, npage, start, perm);
+
+                // (5) 记录虚拟地址
+                npage->pra_vaddr = start;
+
+                assert(ret == 0);
+            }
         }
         start += PGSIZE;
     } while (start != 0 && start < end);

@@ -218,7 +218,8 @@ int dup_mmap(struct mm_struct *to, struct mm_struct *from)
 
         insert_vma_struct(to, nvma);
 
-        bool share = 0;
+        // bool share = 0;
+        bool share = 1;
         if (copy_range(to->pgdir, from->pgdir, vma->vm_start, vma->vm_end, share) != 0)
         {
             return -E_NO_MEM;
@@ -381,4 +382,133 @@ bool user_mem_check(struct mm_struct *mm, uintptr_t addr, size_t len, bool write
         return 1;
     }
     return KERN_ACCESS(addr, addr + len);
+}
+
+int do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr){
+    int ret = -E_INVAL;
+
+    // --- Part 1: 合法性检查 ---
+    // 查找包含 addr 的 VMA (虚拟内存区域)
+    struct vma_struct *vma = find_vma(mm, addr);
+
+    // 1. 如果地址没落在任何 VMA 范围内，说明程序访问了野指针，直接报错
+    if (vma == NULL || addr < vma->vm_start) {
+        cprintf("Invalid addr %x\n", addr);
+        return -E_INVAL;
+    }
+
+    // 2. 检查权限
+    // RISC-V 中，error_code 就是 cause。
+    // CAUSE_STORE_PAGE_FAULT 的值是 15 (在 riscv.h 中定义，或者直接写 15)
+    // 如果是写操作触发的异常，但 VMA 本身标记为不可写，那也是非法访问
+    // 注意：这里我们先不管 COW，只看 VMA 这一层的大逻辑
+    // 标志位定义在 vmm.h: VM_WRITE, VM_READ 等
+    if ((error_code == CAUSE_STORE_PAGE_FAULT) && !(vma->vm_flags & VM_WRITE)) {
+         cprintf("Write access to read-only vma!\n");
+         return -E_INVAL;
+    }
+    
+    // --- 准备工作 ---
+    // 把权限位转成 PTE 格式，准备一会给页表用
+    uint32_t perm = PTE_U;
+    if (vma->vm_flags & VM_WRITE) {
+        perm |= (PTE_R | PTE_W);
+    }
+    // 把地址对齐到页边界 (4KB)
+    addr = ROUNDDOWN(addr, PGSIZE);
+    
+    ret = -E_NO_MEM; // 默认返回内存不足错误
+    pte_t *ptep = NULL;
+    
+    // 获取页表项 (第三个参数 0 表示如果页表不存在，不自动创建，只返回 NULL)
+    // 我们先看看原来有没有映射，以此判断是 COW 还是 第一次访问
+    ptep = get_pte(mm->pgdir, addr, 0);
+
+
+    // --- Part 2: COW 核心逻辑 (我们要填的地方) ---
+    // 只有同时满足以下条件，才是 COW：
+    // 1. 页表项存在 (*ptep != 0)
+    // 2. 也是有效的 (*ptep & PTE_V)
+    // 3. 是写操作触发的 (error_code == 15)
+    // 4. 页表项里有我们打的 PTE_COW 标记
+    if (ptep && (*ptep & PTE_V) && (error_code == CAUSE_STORE_PAGE_FAULT) && (*ptep & PTE_COW)) {
+        
+        // 【这里是你实现 COW 的地方】
+        // 伪代码逻辑：
+        // 1. alloc_page() 申请新页
+        // 2. memcpy() 拷贝旧页内容
+        // 3. page_insert() 建立新映射，并赋予 PTE_W 权限
+        
+        // 咱们先停在这，等你消化完 Part 1，我们单独细写这一块。
+        // 现在你可以先写个 cprintf("COW triggered!\n"); 占位。
+        // 【插入这行】
+        cprintf("COW TRIGGERED: addr=0x%x, pid=%d\n", addr, current->pid);
+        struct Page *page = pte2page(*ptep); // 获取当前旧的物理页
+        
+        // 计算新页面的权限：
+        // 既然是 COW 进来的，说明 VMA 肯定是可写的 (VM_WRITE)。
+        // 所以新页面的权限应该是：用户态(PTE_U) | 可写(PTE_W) | 有效(PTE_V)
+        // 注意：这里绝对不能再有 PTE_COW 了！
+        uint32_t perm = PTE_U | PTE_W | PTE_V; 
+
+        // 2. 【优化】: 如果这个物理页的引用计数只有 1
+        // 说明我是唯一的拥有者（比如子进程已经退出了，或者子进程已经 copy 走了）。
+        // 那我就不需要费劲申请新页和拷贝了，直接把自己扶正即可。
+        if (page_ref(page) == 1) {
+            
+            // 修改 PTE：去掉 PTE_COW，加上 PTE_W
+            *ptep &= ~PTE_COW;
+            *ptep |= PTE_W;
+            
+            // 别忘了刷新 TLB！因为 CPU 缓存里可能还记着它是只读的。
+            tlb_invalidate(mm->pgdir, addr);
+            cprintf("COW optimized for refcount 1!\n");
+            
+            return 0; // 搞定收工
+        }
+
+        // 3. 【复制】: 标准流程 (ref > 1)
+        // 说明还有别的人（比如父进程）也在用这个页，我得独立出来。
+
+        // A. 申请一块新的物理页
+        struct Page *npage = alloc_page();
+        if (npage == NULL) {
+            return -E_NO_MEM; // 内存不足，这就没办法了
+        }
+
+        // B. 拷贝数据
+        // page2kva 把物理页转成内核虚拟地址，方便 memcpy
+        void * src_kvaddr = page2kva(page);
+        void * dst_kvaddr = page2kva(npage);
+        memcpy(dst_kvaddr, src_kvaddr, PGSIZE);
+
+        // C. 建立新映射 (偷天换日)
+        // 这一步非常关键！page_insert 帮我们做了三件事：
+        //   1. 把虚拟地址 addr 指向了 npage。
+        //   2. 把 npage 的引用计数 +1。
+        //   3. 【自动】把原来旧 page 的引用计数 -1 (因为它发现这里原来有映射)。
+        if (page_insert(mm->pgdir, npage, addr, perm) != 0) {
+            free_page(npage);
+            return -E_NO_MEM;
+        }
+        cprintf("COW handled by copying page!\n");
+
+        // page_insert 内部会自动刷新 TLB，所以这里不需要手动 tlb_invalidate
+        // 但为了保险起见，或者根据 ucore 具体实现，手动加一个也没错。
+        
+        return 0; // 搞定收工
+    }
+
+
+    // --- Part 3: 普通缺页处理 (First Access) ---
+    // 如果走到这里，说明不是 COW，而是“这页内存从来没分配过”
+    // 比如你 malloc 了一块内存，第一次去读写它，就会进到这里。
+    
+    // pgdir_alloc_page 会申请一个物理页，并建立映射
+    if (pgdir_alloc_page(mm->pgdir, addr, perm) == NULL) {
+        cprintf("pgdir_alloc_page failed\n");
+        return -E_NO_MEM;
+    }
+
+    return 0;
 }

@@ -227,14 +227,47 @@ void exception_handler(struct trapframe *tf)
     case CAUSE_MACHINE_ECALL:
         cprintf("Environment call from M-mode\n");
         break;
+    // case CAUSE_FETCH_PAGE_FAULT:
+    //     cprintf("Instruction page fault\n");
+    //     break;
+    // case CAUSE_LOAD_PAGE_FAULT:
+    //     cprintf("Load page fault\n");
+    //     break;
+    // case CAUSE_STORE_PAGE_FAULT:
+    //     cprintf("Store/AMO page fault\n");
+    //     break;
     case CAUSE_FETCH_PAGE_FAULT:
-        cprintf("Instruction page fault\n");
-        break;
     case CAUSE_LOAD_PAGE_FAULT:
-        cprintf("Load page fault\n");
-        break;
     case CAUSE_STORE_PAGE_FAULT:
-        cprintf("Store/AMO page fault\n");
+        // cprintf("Page fault at 0x%08x: %s\n", tf->tval, ...); // 可选：打印一下方便调试
+
+        // 调用 do_pgfault
+        // mm: 当前进程的内存管理结构
+        // tf->cause: 异常原因（比如 15 代表 STORE_PAGE_FAULT）
+        // tf->tval: 缺页的虚拟地址 (Bad Address)
+        // 【插入这行】
+        // 看看是谁踩了雷？踩了哪个地址？
+        if (tf->cause == CAUSE_LOAD_PAGE_FAULT) {
+            cprintf("PAGE FAULT: Load fault at 0x%x\n", tf->tval);
+        } else if (tf->cause == CAUSE_FETCH_PAGE_FAULT) {
+            cprintf("PAGE FAULT: Fetch fault at 0x%x\n", tf->tval);
+        } else {
+            cprintf("PAGE FAULT: Store fault at 0x%x\n", tf->tval);
+        }
+        if ((ret = do_pgfault(current->mm, tf->cause, tf->tval)) != 0){
+            // 检查一下：是谁在搞事情？
+            if (tf->status & SSTATUS_SPP) { 
+                // SSTATUS_SPP != 0 说明异常发生前是 Supervisor Mode (内核态)
+                // 内核自己访问野指针，这是绝症，必须 Panic
+                print_trapframe(tf);
+                panic("handle pgfault failed. %e\n", ret);
+            } else {
+                // SSTATUS_SPP == 0 说明异常发生前是 User Mode (用户态)
+                // 用户程序瞎搞（比如访问地址 0），那就杀掉这个用户进程
+                cprintf("Killed user process due to invalid memory access (0x%x).\n", tf->tval);
+                do_exit(-E_KILLED); 
+            }
+        }
         break;
     default:
         print_trapframe(tf);
